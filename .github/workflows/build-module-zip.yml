@@ -1,0 +1,68 @@
+name: build-module-zip
+
+on:
+  workflow_dispatch:
+
+jobs:
+  pack:
+    name: Pack the Go module zip
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out the module source
+        uses: actions/checkout@v4
+        with:
+          path: src
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Build the module zip with golang.org/x/mod/zip
+        run: |
+          set -eux
+          # This packing workflow is build scaffolding, not module content:
+          # upstream ships no .github/ at all, so drop it from the tree that
+          # gets zipped to keep the member list identical to the public zip.
+          rm -rf "$GITHUB_WORKSPACE/src/.github"
+          mkdir -p "$RUNNER_TEMP/packer" "$RUNNER_TEMP/dist"
+          cd "$RUNNER_TEMP/packer"
+          cat > create_mod.go <<'GOEOF'
+          package main
+
+          import (
+              "log"
+              "os"
+
+              "golang.org/x/mod/module"
+              "golang.org/x/mod/zip"
+          )
+
+          func main() {
+              if len(os.Args) != 5 {
+                  log.Fatal("usage: create_mod <module-path> <version> <source-dir> <output-zip>")
+              }
+              m := module.Version{Path: os.Args[1], Version: os.Args[2]}
+              f, err := os.Create(os.Args[4])
+              if err != nil {
+                  log.Fatal(err)
+              }
+              defer f.Close()
+              if err := zip.CreateFromDir(f, m, os.Args[3]); err != nil {
+                  log.Fatal(err)
+              }
+              log.Printf("created module zip: %s", os.Args[4])
+          }
+          GOEOF
+          go mod init example.com/packer
+          go get golang.org/x/mod@v0.22.0
+          go run ./create_mod.go github.com/Masterminds/goutils v1.1.0 "$GITHUB_WORKSPACE/src" "$RUNNER_TEMP/dist/v1.1.0.zip"
+          unzip -l "$RUNNER_TEMP/dist/v1.1.0.zip"
+
+      - name: Upload the module zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: module-zip
+          path: ${{ runner.temp }}/dist/v1.1.0.zip
+          if-no-files-found: error
